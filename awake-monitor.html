@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>DrowsyGuard Pro · AI Drowsiness Detection</title>
+
+<!-- MediaPipe official (fastest, most accurate) -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Inter:wght@300;400;500;600;700&display=swap');
+:root{
+  --bg:#020408;--s1:#060b12;--s2:#0a1020;--border:#111e30;
+  --accent:#00cfff;--green:#00ff9d;--red:#ff2d55;--yellow:#ffd60a;
+  --orange:#ff6b00;--purple:#bf5af2;--text:#c8d8e8;--muted:#2d4560;
+  --glow-b:rgba(0,207,255,0.15);--glow-g:rgba(0,255,157,0.15);--glow-r:rgba(255,45,85,0.15);
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);display:flex;flex-direction:column;align-items:center;overflow-x:hidden;}
+
+/* Animated background grid */
+body::before{
+  content:'';position:fixed;inset:0;
+  background-image:linear-gradient(rgba(0,207,255,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(0,207,255,0.03) 1px,transparent 1px);
+  background-size:40px 40px;pointer-events:none;z-index:0;
+}
+
+/* ── TOP BAR ── */
+.topbar{
+  width:100%;background:rgba(6,11,18,0.95);
+  border-bottom:1px solid var(--border);
+  padding:10px 24px;display:flex;align-items:center;
+  justify-content:space-between;position:sticky;top:0;z-index:100;
+  backdrop-filter:blur(12px);
+}
+.brand{display:flex;align-items:center;gap:12px;}
+.brand-logo{
+  width:36px;height:36px;border-radius:8px;
+  background:linear-gradient(135deg,#00cfff22,#00ff9d22);
+  border:1px solid var(--accent);display:flex;align-items:center;justify-content:center;
+  font-size:1.2rem;box-shadow:0 0 12px rgba(0,207,255,0.2);
+}
+.brand-text .name{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:0.95rem;color:var(--accent);letter-spacing:0.1em;}
+.brand-text .sub{font-size:0.58rem;color:var(--muted);font-family:'IBM Plex Mono',monospace;letter-spacing:0.06em;margin-top:1px;}
+.sys-row{display:flex;align-items:center;gap:16px;}
+.sys-pill{display:flex;align-items:center;gap:6px;font-family:'IBM Plex Mono',monospace;font-size:0.68rem;color:var(--muted);}
+.sdot{width:7px;height:7px;border-radius:50%;}
+.sdot.idle{background:var(--muted);}
+.sdot.loading{background:var(--yellow);animation:sdotpulse 0.8s infinite;}
+.sdot.ready{background:var(--green);}
+.sdot.live{background:var(--red);animation:sdotpulse 0.6s infinite;}
+.sdot.error{background:var(--red);}
+@keyframes sdotpulse{0%,100%{opacity:1;box-shadow:0 0 0 0 currentColor}50%{opacity:0.3;box-shadow:0 0 4px 2px currentColor}}
+
+/* ── MAIN ── */
+.main{width:100%;max-width:920px;padding:18px 14px 30px;display:flex;flex-direction:column;gap:14px;position:relative;z-index:1;}
+
+/* ── STATS GRID ── */
+.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;}
+.stat{
+  background:var(--s1);border:1px solid var(--border);border-radius:10px;
+  padding:10px 6px;text-align:center;position:relative;overflow:hidden;
+  transition:border-color 0.3s,box-shadow 0.3s;
+}
+.stat.alert-stat{border-color:rgba(255,45,85,0.4);box-shadow:0 0 12px rgba(255,45,85,0.1);}
+.stat::after{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:0.4;}
+.stat-val{font-family:'IBM Plex Mono',monospace;font-size:1.15rem;font-weight:600;color:var(--accent);display:block;line-height:1.1;}
+.stat-lbl{font-size:0.56rem;color:var(--muted);margin-top:4px;text-transform:uppercase;letter-spacing:0.08em;}
+
+/* ── CONTROLS ── */
+.ctrl-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:center;}
+.btn{
+  padding:10px 22px;border-radius:8px;border:none;font-weight:700;
+  cursor:pointer;font-size:0.85rem;font-family:'Inter',sans-serif;
+  letter-spacing:0.03em;transition:all 0.2s;display:inline-flex;
+  align-items:center;gap:7px;position:relative;overflow:hidden;
+}
+.btn::after{content:'';position:absolute;inset:0;background:rgba(255,255,255,0.1);opacity:0;transition:opacity 0.2s;}
+.btn:hover::after{opacity:1;}
+.btn-start{background:linear-gradient(135deg,#00cfff,#0077ff);color:#000;box-shadow:0 4px 20px rgba(0,207,255,0.3);}
+.btn-stop{background:linear-gradient(135deg,#ff2d55,#cc0030);color:#fff;box-shadow:0 4px 20px rgba(255,45,85,0.3);display:none;}
+.btn:disabled{opacity:0.25;cursor:not-allowed;box-shadow:none;}
+.toggle{
+  padding:7px 14px;border-radius:20px;border:1px solid var(--border);
+  background:var(--s1);color:var(--muted);font-size:0.72rem;
+  font-family:'IBM Plex Mono',monospace;cursor:pointer;transition:all 0.2s;
+}
+.toggle.on{border-color:rgba(0,207,255,0.5);color:var(--accent);background:rgba(0,207,255,0.06);box-shadow:0 0 8px rgba(0,207,255,0.1);}
+
+/* ── EYE STATUS ── */
+.eye-status{
+  background:var(--s1);border:1px solid var(--border);border-radius:12px;
+  padding:14px 20px;display:flex;align-items:center;justify-content:space-between;
+  gap:16px;flex-wrap:wrap;transition:border-color 0.3s,box-shadow 0.3s;
+}
+.eye-status.awake{border-color:rgba(0,255,157,0.3);box-shadow:0 0 20px rgba(0,255,157,0.05);}
+.eye-status.drowsy{border-color:rgba(255,45,85,0.4);box-shadow:0 0 20px rgba(255,45,85,0.1);}
+.eye-text{font-family:'IBM Plex Mono',monospace;font-size:0.95rem;font-weight:500;min-height:22px;letter-spacing:0.03em;}
+.bar-section{flex:1;min-width:200px;}
+.bar-labels{display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:0.6rem;color:var(--muted);margin-bottom:5px;}
+.bar-track{background:var(--border);border-radius:8px;height:10px;overflow:hidden;position:relative;}
+.bar-fill{height:100%;width:0%;border-radius:8px;transition:width 0.08s linear,background 0.3s;background:var(--accent);}
+.bar-glow{position:absolute;inset:0;opacity:0;transition:opacity 0.3s;}
+
+/* ── EAR METERS ── */
+.ear-row{display:flex;gap:8px;}
+.ear-meter{flex:1;background:var(--s1);border:1px solid var(--border);border-radius:10px;padding:10px 14px;}
+.ear-title{font-family:'IBM Plex Mono',monospace;font-size:0.62rem;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.08em;}
+.ear-val{font-family:'IBM Plex Mono',monospace;font-size:1.4rem;font-weight:600;display:block;transition:color 0.3s;}
+.ear-bar-track{background:var(--border);border-radius:4px;height:5px;margin-top:6px;overflow:hidden;}
+.ear-bar-fill{height:100%;border-radius:4px;transition:width 0.1s,background 0.3s;}
+
+/* ── VIDEO ── */
+.video-card{
+  background:#000;border:1px solid var(--border);border-radius:16px;
+  overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.5);
+  transition:box-shadow 0.3s;
+}
+.video-card.awake-glow{box-shadow:0 0 40px rgba(0,255,157,0.08),0 8px 40px rgba(0,0,0,0.5);}
+.video-card.drowsy-glow{box-shadow:0 0 40px rgba(255,45,85,0.15),0 8px 40px rgba(0,0,0,0.5);}
+.video-chrome{
+  background:var(--s1);border-bottom:1px solid var(--border);
+  padding:9px 16px;display:flex;align-items:center;gap:6px;
+  font-family:'IBM Plex Mono',monospace;font-size:0.65rem;color:var(--muted);
+}
+.mdot{width:11px;height:11px;border-radius:50%;}
+.chrome-title{margin-left:10px;color:var(--text);font-size:0.7rem;}
+.cam-tag{margin-left:auto;display:flex;align-items:center;gap:5px;}
+.rec-dot{width:7px;height:7px;border-radius:50%;background:var(--red);animation:sdotpulse 0.7s infinite;display:none;}
+.rec-dot.active{display:block;}
+
+.video-body{position:relative;background:#000;}
+video{width:100%;display:block;max-height:500px;object-fit:cover;transform:scaleX(-1);}
+#overlay{position:absolute;top:0;left:0;width:100%;height:100%;transform:scaleX(-1);}
+
+/* HUD */
+.hud-tl{position:absolute;top:12px;left:12px;display:flex;flex-direction:column;gap:5px;z-index:10;}
+.hud-tr{position:absolute;top:12px;right:12px;display:flex;flex-direction:column;gap:5px;align-items:flex-end;z-index:10;}
+.hud-bl{position:absolute;bottom:12px;left:12px;display:flex;flex-direction:column;gap:5px;z-index:10;}
+.hud-br{position:absolute;bottom:12px;right:12px;display:flex;flex-direction:column;gap:5px;align-items:flex-end;z-index:10;}
+.hp{
+  background:rgba(2,4,8,0.88);border:1px solid var(--border);
+  border-radius:5px;padding:3px 9px;font-family:'IBM Plex Mono',monospace;
+  font-size:0.62rem;backdrop-filter:blur(4px);white-space:nowrap;
+}
+.hp.g{color:var(--green);border-color:rgba(0,255,157,0.2);}
+.hp.a{color:var(--accent);border-color:rgba(0,207,255,0.2);}
+.hp.r{color:var(--red);border-color:rgba(255,45,85,0.2);}
+.hp.y{color:var(--yellow);border-color:rgba(255,214,10,0.2);}
+.hp.p{color:var(--purple);border-color:rgba(191,90,242,0.2);}
+
+/* Scanline overlay */
+.scanline{position:absolute;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.03) 3px,rgba(0,0,0,0.03) 4px);pointer-events:none;z-index:5;}
+
+/* ── ALERT POPUP ── */
+#alertBox{
+  display:none;position:fixed;inset:0;
+  background:rgba(0,0,0,0.96);z-index:999;
+  justify-content:center;align-items:center;
+}
+#alertBox.show{display:flex;animation:alertIn 0.3s ease;}
+@keyframes alertIn{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+.alert-wrap{position:relative;max-width:380px;width:92%;}
+.alert-ring{
+  position:absolute;inset:-20px;border-radius:30px;
+  border:2px solid var(--red);animation:ringpulse 1s infinite;
+  pointer-events:none;
+}
+@keyframes ringpulse{0%,100%{opacity:0.3;transform:scale(1)}50%{opacity:0.8;transform:scale(1.02)}}
+.alert-card{
+  background:linear-gradient(145deg,#0d0005,#120008);
+  border:2px solid rgba(255,45,85,0.6);border-radius:20px;
+  padding:44px 36px;text-align:center;
+  box-shadow:0 0 60px rgba(255,45,85,0.3),inset 0 0 40px rgba(255,45,85,0.05);
+}
+.alert-emoji{font-size:4.5rem;display:block;animation:aemoji 0.5s infinite alternate;}
+@keyframes aemoji{from{transform:translateY(0)scale(1)rotate(-3deg)}to{transform:translateY(-14px)scale(1.05)rotate(3deg)}}
+.alert-title{
+  font-family:'IBM Plex Mono',monospace;font-size:2.4rem;font-weight:600;
+  color:var(--red);margin:12px 0 8px;
+  text-shadow:0 0 20px rgba(255,45,85,0.6);letter-spacing:0.05em;
+}
+.alert-sub{font-size:0.88rem;color:#99aacc;line-height:1.7;margin-bottom:8px;}
+.alert-meta{font-family:'IBM Plex Mono',monospace;font-size:0.68rem;color:var(--muted);margin-bottom:24px;}
+.alert-divider{height:1px;background:linear-gradient(90deg,transparent,rgba(255,45,85,0.4),transparent);margin:16px 0;}
+.btn-wake{
+  width:100%;padding:14px;
+  background:linear-gradient(135deg,#ff2d55,#cc0030);
+  color:#fff;border:none;border-radius:10px;font-size:1rem;
+  font-weight:700;cursor:pointer;letter-spacing:0.04em;
+  box-shadow:0 4px 20px rgba(255,45,85,0.4);transition:transform 0.2s;
+}
+.btn-wake:hover{transform:translateY(-2px);}
+
+/* ── LOG ── */
+.log-card{background:var(--s1);border:1px solid var(--border);border-radius:12px;overflow:hidden;}
+.log-hdr{
+  padding:10px 18px;border-bottom:1px solid var(--border);
+  font-family:'IBM Plex Mono',monospace;font-size:0.64rem;color:var(--muted);
+  text-transform:uppercase;letter-spacing:0.1em;
+  display:flex;justify-content:space-between;align-items:center;
+}
+.log-body{max-height:160px;overflow-y:auto;}
+.log-row{
+  display:flex;align-items:center;gap:10px;
+  padding:9px 18px;border-bottom:1px solid rgba(17,30,48,0.6);
+  font-size:0.75rem;transition:background 0.2s;
+}
+.log-row:hover{background:rgba(0,207,255,0.03);}
+.log-idx{font-family:'IBM Plex Mono',monospace;color:var(--red);font-size:0.67rem;min-width:28px;}
+.log-msg{flex:1;color:var(--text);}
+.log-dur{font-family:'IBM Plex Mono',monospace;font-size:0.66rem;color:var(--yellow);}
+.log-ts{font-family:'IBM Plex Mono',monospace;font-size:0.64rem;color:var(--muted);min-width:70px;text-align:right;}
+.log-empty{padding:18px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:0.7rem;color:var(--muted);}
+
+/* ── FOOTER ── */
+.footer{
+  width:100%;border-top:1px solid var(--border);padding:10px 24px;
+  display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;
+  font-family:'IBM Plex Mono',monospace;font-size:0.58rem;color:var(--muted);
+  background:var(--s1);position:relative;z-index:1;
+}
+.footer b{color:var(--accent);}
+
+@media(max-width:580px){
+  .stats{grid-template-columns:repeat(3,1fr);}
+  .ear-row{flex-direction:column;}
+  .hud-bl,.hud-br{display:none;}
+}
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div class="topbar">
+  <div class="brand">
+    <div class="brand-logo">👁️</div>
+    <div class="brand-text">
+      <div class="name">DROWSYGUARD PRO</div>
+      <div class="sub">REAL-TIME AI DROWSINESS DETECTION SYSTEM</div>
+    </div>
+  </div>
+  <div class="sys-row">
+    <div class="sys-pill"><div class="sdot loading" id="sdot"></div><span id="sysLabel">Initializing…</span></div>
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- STATS -->
+  <div class="stats">
+    <div class="stat" id="statAlertCard"><span class="stat-val" id="sAlerts">0</span><div class="stat-lbl">Alerts</div></div>
+    <div class="stat"><span class="stat-val" id="sClosed">0.0s</span><div class="stat-lbl">Closed</div></div>
+    <div class="stat"><span class="stat-val" id="sUptime">0s</span><div class="stat-lbl">Uptime</div></div>
+    <div class="stat"><span class="stat-val" id="sFaces">0</span><div class="stat-lbl">Faces</div></div>
+    <div class="stat"><span class="stat-val" id="sFps">--</span><div class="stat-lbl">FPS</div></div>
+    <div class="stat"><span class="stat-val" id="sEar">--</span><div class="stat-lbl">Avg EAR</div></div>
+  </div>
+
+  <!-- CONTROLS -->
+  <div class="ctrl-row">
+    <button class="btn btn-start" id="startBtn" disabled>▶ Start Monitoring</button>
+    <button class="btn btn-stop"  id="stopBtn">■ Stop</button>
+    <button class="toggle on" id="soundBtn">🔊 Sound</button>
+    <button class="toggle on" id="vibBtn">📳 Vibration</button>
+  </div>
+
+  <!-- EYE STATUS + SLEEP BAR -->
+  <div class="eye-status" id="eyeStatusBox">
+    <div class="eye-text" id="eyeText">—</div>
+    <div class="bar-section">
+      <div class="bar-labels"><span>Sleep Timer</span><span id="barPct">0%  /  3.0s</span></div>
+      <div class="bar-track"><div class="bar-fill" id="barFill"></div></div>
+    </div>
+  </div>
+
+  <!-- EAR METERS -->
+  <div class="ear-row">
+    <div class="ear-meter">
+      <div class="ear-title">Left Eye · EAR</div>
+      <span class="ear-val" id="lEarVal">—</span>
+      <div class="ear-bar-track"><div class="ear-bar-fill" id="lEarBar" style="width:0%;background:var(--accent)"></div></div>
+    </div>
+    <div class="ear-meter">
+      <div class="ear-title">Right Eye · EAR</div>
+      <span class="ear-val" id="rEarVal">—</span>
+      <div class="ear-bar-track"><div class="ear-bar-fill" id="rEarBar" style="width:0%;background:var(--accent)"></div></div>
+    </div>
+    <div class="ear-meter">
+      <div class="ear-title">Average EAR · Threshold 0.20</div>
+      <span class="ear-val" id="aEarVal">—</span>
+      <div class="ear-bar-track"><div class="ear-bar-fill" id="aEarBar" style="width:0%;background:var(--accent)"></div></div>
+    </div>
+  </div>
+
+  <!-- VIDEO -->
+  <div class="video-card" id="videoCard">
+    <div class="video-chrome">
+      <div class="mdot" style="background:#ff5f57"></div>
+      <div class="mdot" style="background:#febc2e"></div>
+      <div class="mdot" style="background:#28c840"></div>
+      <span class="chrome-title">LIVE FEED · DrowsyGuard Pro</span>
+      <div class="cam-tag">
+        <div class="rec-dot" id="recDot"></div>
+        <span id="camTag" style="font-family:'IBM Plex Mono',monospace;font-size:0.65rem;color:var(--muted)">STANDBY</span>
+      </div>
+    </div>
+    <div class="video-body">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div class="scanline"></div>
+      <div class="hud-tl">
+        <div class="hp a" id="hModel">MODEL: LOADING</div>
+        <div class="hp g" id="hRuntime">RUNTIME: MEDIAPIPE</div>
+        <div class="hp p" id="hLandmarks">LANDMARKS: 468</div>
+      </div>
+      <div class="hud-tr">
+        <div class="hp a" id="hFps">-- fps</div>
+        <div class="hp g" id="hFaces">0 faces</div>
+        <div class="hp y" id="hEarHud">EAR: —</div>
+      </div>
+      <div class="hud-bl">
+        <div class="hp a">EAR ALGORITHM: SOUKUPOVA 2016</div>
+        <div class="hp g">BACKEND: WEBASSEMBLY</div>
+      </div>
+      <div class="hud-br">
+        <div class="hp a" id="hState">STATE: STANDBY</div>
+        <div class="hp g" id="hConf">CONF: —</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- LOG -->
+  <div class="log-card">
+    <div class="log-hdr">
+      <span>📋 Alert Log</span>
+      <span id="logCount" style="color:var(--accent)">0 events</span>
+    </div>
+    <div class="log-body" id="logBody">
+      <div class="log-empty">No drowsiness events recorded</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  <span><b>DrowsyGuard Pro</b> v3.0</span>
+  <span>Engine: <b>MediaPipe FaceMesh WASM</b></span>
+  <span>EAR: <b>Soukupova & Cech 2016</b></span>
+  <span>Landmarks: <b>468 pts · 33 refined iris</b></span>
+  <span>Threshold: <b>EAR &lt; 0.20 for 3s</b></span>
+</div>
+
+<!-- ALERT -->
+<div id="alertBox">
+  <div class="alert-wrap">
+    <div class="alert-ring"></div>
+    <div class="alert-card">
+      <span class="alert-emoji">😴</span>
+      <div class="alert-title">WAKE UP!</div>
+      <div class="alert-sub">Drowsiness detected!<br/>Eyes closed for over <b style="color:var(--red)">3 seconds</b>.<br/>Please stay alert! 📚</div>
+      <div class="alert-divider"></div>
+      <div class="alert-meta" id="aMeta"></div>
+      <button class="btn-wake" onclick="dismissAlert()">✅ &nbsp;I'm Awake — Dismiss</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+//  DrowsyGuard Pro v3.0
+//  Engine  : MediaPipe FaceMesh (official WASM backend)
+//  Algorithm: Eye Aspect Ratio (Soukupova & Cech, 2016)
+//  Landmarks: 468 facial + 33 refined iris keypoints
+// ═══════════════════════════════════════════════════════
+
+const SLEEP_MS   = 3000;
+const EAR_THRESH = 0.20;
+
+// Precise 6-point EAR indices (MediaPipe FaceMesh)
+const L_EYE = [362,385,387,263,373,380];
+const R_EYE = [33, 160,158,133,153,144];
+
+// Full eye contours for polygon drawing
+const L_CONTOUR = [362,382,381,380,374,373,390,249,263,466,388,387,386,385,384,398];
+const R_CONTOUR = [33,7,163,144,145,153,154,155,133,173,157,158,159,160,161,246];
+
+// Iris refined landmarks
+const L_IRIS = [474,475,476,477,473];
+const R_IRIS = [469,470,471,472,468];
+
+// Key face landmarks for box
+const FACE_OVAL = [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
+
+let faceMesh=null, camera=null, running=false;
+let closedStart=null, alerted=false;
+let alertCount=0, startTime=null, uptimeTimer=null;
+let fpsN=0, fpsT=performance.now();
+let soundOn=true, vibOn=true, audioCtx=null, alarmId=null;
+let lastEarAvg=0;
+
+const $=id=>document.getElementById(id);
+const video=$('video'), overlay=$('overlay'), ctx=overlay.getContext('2d');
+
+function setStatus(cls,txt){ $('sdot').className='sdot '+cls; $('sysLabel').textContent=txt; }
+
+// ── Audio Engine ──
+function getAC(){ if(!audioCtx) audioCtx=new(window.AudioContext||window.webkitAudioContext)(); return audioCtx; }
+function tone(freq,delay,dur,vol,type='square'){
+  try{
+    const a=getAC(),o=a.createOscillator(),g=a.createGain(),f=a.createBiquadFilter();
+    f.type='bandpass'; f.frequency.value=freq; f.Q.value=1.5;
+    o.connect(f); f.connect(g); g.connect(a.destination);
+    o.type=type; o.frequency.setValueAtTime(freq,a.currentTime+delay);
+    g.gain.setValueAtTime(0,a.currentTime+delay);
+    g.gain.linearRampToValueAtTime(vol,a.currentTime+delay+0.015);
+    g.gain.exponentialRampToValueAtTime(0.001,a.currentTime+delay+dur);
+    o.start(a.currentTime+delay); o.stop(a.currentTime+delay+dur+0.1);
+  }catch(e){}
+}
+function playAlarm(){
+  // Dual-oscillator urgent alarm
+  tone(440,0,   .12,.5,'sawtooth'); tone(523,0,   .12,.4,'square');
+  tone(587,.16, .12,.5,'sawtooth'); tone(698,.16, .12,.4,'square');
+  tone(784,.32, .15,.6,'sawtooth'); tone(880,.32, .15,.5,'square');
+  tone(1047,.50,.22,.7,'sawtooth'); tone(1175,.50,.22,.6,'square');
+}
+function startAlarm(){ if(!soundOn)return; playAlarm(); alarmId=setInterval(()=>{if(soundOn)playAlarm();},1600); }
+function stopAlarm(){ clearInterval(alarmId); alarmId=null; }
+function vibrate(){ if(vibOn&&navigator.vibrate) navigator.vibrate([500,100,500,100,800,100,500]); }
+function stopVib(){ if(navigator.vibrate) navigator.vibrate(0); }
+
+$('soundBtn').onclick=()=>{
+  soundOn=!soundOn;
+  $('soundBtn').textContent=soundOn?'🔊 Sound':'🔇 Sound';
+  $('soundBtn').className='toggle'+(soundOn?' on':'');
+  if(!soundOn)stopAlarm();
+};
+$('vibBtn').onclick=()=>{
+  vibOn=!vibOn;
+  $('vibBtn').textContent=vibOn?'📳 Vibration':'📴 Vibration';
+  $('vibBtn').className='toggle'+(vibOn?' on':'');
+};
+
+// ── EAR Formula ──
+function ear(lm,idx){
+  const p=i=>lm[i], d=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+  return(d(p(idx[1]),p(idx[5]))+d(p(idx[2]),p(idx[4])))/(2*d(p(idx[0]),p(idx[3])));
+}
+
+// ── Update EAR meters ──
+function updateEarMeters(lEar,rEar,avg,open){
+  const color=open?'var(--green)':'var(--red)';
+  const pL=Math.min(100,lEar*400), pR=Math.min(100,rEar*400), pA=Math.min(100,avg*400);
+  $('lEarVal').textContent=lEar.toFixed(4); $('lEarVal').style.color=lEar>EAR_THRESH?'var(--green)':'var(--red)';
+  $('rEarVal').textContent=rEar.toFixed(4); $('rEarVal').style.color=rEar>EAR_THRESH?'var(--green)':'var(--red)';
+  $('aEarVal').textContent=avg.toFixed(4);  $('aEarVal').style.color=color;
+  $('lEarBar').style.width=pL+'%'; $('lEarBar').style.background=lEar>EAR_THRESH?'var(--green)':'var(--red)';
+  $('rEarBar').style.width=pR+'%'; $('rEarBar').style.background=rEar>EAR_THRESH?'var(--green)':'var(--red)';
+  $('aEarBar').style.width=pA+'%'; $('aEarBar').style.background=color;
+  $('hEarHud').textContent='EAR: '+avg.toFixed(3);
+  $('sEar').textContent=avg.toFixed(3);
+}
+
+// ── MediaPipe FaceMesh ──
+setStatus('loading','Loading MediaPipe FaceMesh…');
+
+faceMesh = new FaceMesh({locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`});
+faceMesh.setOptions({
+  maxNumFaces: 3,
+  refineLandmarks: true,      // enables iris landmarks
+  minDetectionConfidence: 0.6,
+  minTrackingConfidence: 0.6,
+});
+
+faceMesh.onResults(onResults);
+faceMesh.initialize().then(()=>{
+  setStatus('ready','Ready · Press Start');
+  $('hModel').textContent='MODEL: FACEMESH ✓';
+  $('startBtn').disabled=false;
+}).catch(e=>{
+  console.error(e);
+  setStatus('error','Failed — run via: python -m http.server 8000');
+});
+
+// ── Camera ──
+$('startBtn').onclick=async()=>{
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:'user',width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30}}
+    });
+    video.srcObject=stream;
+    await new Promise(r=>video.onloadedmetadata=r);
+    await video.play();
+    running=true; startTime=Date.now();
+    $('startBtn').style.display='none';
+    $('stopBtn').style.display='inline-flex';
+    $('camTag').textContent='● REC'; $('recDot').classList.add('active');
+    $('hState').textContent='STATE: MONITORING';
+    setStatus('live','Live · Monitoring active');
+    uptimeTimer=setInterval(()=>$('sUptime').textContent=Math.floor((Date.now()-startTime)/1000)+'s',1000);
+    processLoop();
+  }catch(e){
+    setStatus('error','Camera denied — allow camera permission');
+  }
+};
+
+$('stopBtn').onclick=()=>{
+  running=false; clearInterval(uptimeTimer);
+  stopAlarm(); stopVib();
+  if(video.srcObject) video.srcObject.getTracks().forEach(t=>t.stop());
+  $('startBtn').style.display='inline-flex';
+  $('stopBtn').style.display='none';
+  $('camTag').textContent='STANDBY'; $('recDot').classList.remove('active');
+  ctx.clearRect(0,0,overlay.width,overlay.height);
+  $('eyeText').textContent='—';
+  $('barFill').style.width='0%';
+  $('eyeStatusBox').className='eye-status';
+  $('videoCard').className='video-card';
+  $('hState').textContent='STATE: STANDBY';
+  setStatus('ready','Stopped');
+};
+
+// ── Process loop (sends frames to FaceMesh) ──
+async function processLoop(){
+  if(!running) return;
+  await faceMesh.send({image:video});
+  requestAnimationFrame(processLoop);
+}
+
+// ── Results callback ──
+function onResults(results){
+  if(!running) return;
+  overlay.width=video.videoWidth||640;
+  overlay.height=video.videoHeight||480;
+  ctx.clearRect(0,0,overlay.width,overlay.height);
+
+  const faces=results.multiFaceLandmarks||[];
+  $('sFaces').textContent=faces.length;
+  $('hFaces').textContent=faces.length+' face'+(faces.length!==1?'s':'');
+
+  if(!faces.length){
+    setEyeText('none'); reset();
+    $('eyeStatusBox').className='eye-status';
+    $('videoCard').className='video-card';
+    $('hState').textContent='STATE: NO FACE';
+    $('hConf').textContent='CONF: —';
+    return;
+  }
+
+  // Normalize landmarks to pixel coords
+  const W=overlay.width, H=overlay.height;
+  const norm=lm=>({x:lm.x*W, y:lm.y*H, z:lm.z});
+  const lm0=faces[0].map(norm);
+
+  const lEar=ear(lm0,L_EYE);
+  const rEar=ear(lm0,R_EYE);
+  const avg=(lEar+rEar)/2;
+  const open=avg>EAR_THRESH;
+  lastEarAvg=avg;
+
+  updateEarMeters(lEar,rEar,avg,open);
+  $('hConf').textContent='CONF: '+(open?'AWAKE':'DROWSY');
+  $('hConf').className='hp '+(open?'g':'r');
+
+  // Draw all faces
+  faces.forEach((face,fi)=>{
+    const lm=face.map(norm);
+    const isPrimary=fi===0;
+    drawFaceMesh(lm,isPrimary);
+    drawFaceOval(lm,open,isPrimary);
+    drawEyeFull(lm,L_CONTOUR,L_EYE,L_IRIS,lEar,open,'LEFT',isPrimary);
+    drawEyeFull(lm,R_CONTOUR,R_EYE,R_IRIS,rEar,open,'RIGHT',isPrimary);
+    if(isPrimary) drawNoseBridge(lm,open);
+  });
+
+  // Sleep logic
+  if(open){
+    setEyeText('open'); reset();
+    $('eyeStatusBox').className='eye-status awake';
+    $('videoCard').className='video-card awake-glow';
+    $('hState').textContent='STATE: ✓ AWAKE';
+    $('hState').className='hp g';
+  } else {
+    setEyeText('closed');
+    $('eyeStatusBox').className='eye-status drowsy';
+    $('videoCard').className='video-card drowsy-glow';
+    $('hState').textContent='STATE: ✗ DROWSY';
+    $('hState').className='hp r';
+    if(!closedStart) closedStart=Date.now();
+    const el=Date.now()-closedStart;
+    const pct=Math.min(100,el/SLEEP_MS*100);
+    $('barFill').style.width=pct+'%';
+    $('barFill').style.background=pct>66?'var(--red)':pct>33?'var(--yellow)':'var(--accent)';
+    $('barPct').textContent=Math.round(pct)+'%  /  '+(el/1000).toFixed(1)+'s';
+    $('sClosed').textContent=(el/1000).toFixed(1)+'s';
+    if(el>=SLEEP_MS&&!alerted){
+      alerted=true; alertCount++; $('sAlerts').textContent=alertCount;
+      $('statAlertCard').classList.add('alert-stat');
+      const now=new Date();
+      $('aMeta').textContent='Alert #'+alertCount+' · '+now.toLocaleTimeString()+' · EAR '+avg.toFixed(3);
+      addLog(now,el);
+      $('alertBox').classList.add('show');
+      startAlarm(); vibrate();
+    }
+  }
+  updateFps();
+}
+
+// ── Drawing Functions ──
+
+function drawFaceMesh(lm,primary){
+  if(!primary) return; // only draw mesh on primary face
+  ctx.fillStyle='rgba(0,207,255,0.10)';
+  lm.slice(0,468).forEach(p=>{
+    ctx.beginPath(); ctx.arc(p.x,p.y,1,0,Math.PI*2); ctx.fill();
+  });
+}
+
+function drawFaceOval(lm,open,primary){
+  const pts=FACE_OVAL.map(i=>lm[i]);
+  const color=primary?(open?'rgba(0,255,157,0.25)':'rgba(255,45,85,0.25)'):'rgba(80,100,140,0.15)';
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x,pts[0].y);
+  pts.forEach(p=>ctx.lineTo(p.x,p.y));
+  ctx.closePath();
+  ctx.strokeStyle=primary?(open?'rgba(0,255,157,0.4)':'rgba(255,45,85,0.4)'):'rgba(80,100,140,0.3)';
+  ctx.lineWidth=primary?1.5:1;
+  ctx.stroke();
+
+  if(primary){
+    // Face bounding box with corner brackets
+    const xs=pts.map(p=>p.x),ys=pts.map(p=>p.y);
+    const fx=Math.min(...xs)-12,fy=Math.min(...ys)-12;
+    const fw=Math.max(...xs)-fx+24,fh=Math.max(...ys)-fy+24;
+    const fc=open?'#00ff9d':'#ff2d55';
+    const cs=Math.min(fw,fh)*0.1;
+    ctx.strokeStyle=fc; ctx.lineWidth=2.5;
+    ctx.shadowColor=fc; ctx.shadowBlur=16;
+    [[fx,fy+cs,fx,fy,fx+cs,fy],[fx+fw-cs,fy,fx+fw,fy,fx+fw,fy+cs],
+     [fx,fy+fh-cs,fx,fy+fh,fx+cs,fy+fh],[fx+fw-cs,fy+fh,fx+fw,fy+fh,fx+fw,fy+fh-cs]
+    ].forEach(([x1,y1,x2,y2,x3,y3])=>{
+      ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.lineTo(x3,y3);ctx.stroke();
+    });
+    ctx.shadowBlur=0;
+
+    // Status badge on face
+    const badge=open?'✓ AWAKE':'✗ DROWSY';
+    const fs=Math.max(13,overlay.width*0.017);
+    ctx.font=`bold ${fs}px 'IBM Plex Mono',monospace`;
+    const tw=ctx.measureText(badge).width+14;
+    ctx.fillStyle=fc; ctx.shadowColor=fc; ctx.shadowBlur=12;
+    ctx.fillRect(fx,fy-fs-14,tw,fs+14);
+    ctx.shadowBlur=0; ctx.fillStyle='#000';
+    ctx.fillText(badge,fx+7,fy-5);
+  }
+}
+
+function drawEyeFull(lm,contour,earIdx,irisIdx,earVal,open,side,primary){
+  const color=open?'#00ff9d':'#ff2d55';
+  const alpha=primary?1:0.5;
+  const pts=contour.map(i=>lm[i]);
+
+  // Filled contour
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x,pts[0].y);
+  pts.forEach(p=>ctx.lineTo(p.x,p.y));
+  ctx.closePath();
+  ctx.fillStyle=open?`rgba(0,255,157,${0.08*alpha})`:`rgba(255,45,85,${0.12*alpha})`;
+  ctx.fill();
+
+  // Contour outline
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x,pts[0].y);
+  pts.forEach(p=>ctx.lineTo(p.x,p.y));
+  ctx.closePath();
+  ctx.strokeStyle=color; ctx.lineWidth=1.8*alpha;
+  ctx.shadowColor=color; ctx.shadowBlur=6;
+  ctx.stroke(); ctx.shadowBlur=0;
+
+  // Bounding box
+  const xs=pts.map(p=>p.x),ys=pts.map(p=>p.y);
+  const bx=Math.min(...xs)-8,by=Math.min(...ys)-8;
+  const bw=Math.max(...xs)-bx+16,bh=Math.max(...ys)-by+16;
+
+  ctx.strokeStyle=color; ctx.lineWidth=2*alpha;
+  ctx.shadowColor=color; ctx.shadowBlur=14;
+  ctx.strokeRect(bx,by,bw,bh); ctx.shadowBlur=0;
+
+  // Corner ticks
+  const cs=Math.min(bw,bh)*0.25;
+  ctx.lineWidth=3*alpha; ctx.shadowColor=color; ctx.shadowBlur=10;
+  [[bx,by+cs,bx,by,bx+cs,by],[bx+bw-cs,by,bx+bw,by,bx+bw,by+cs],
+   [bx,by+bh-cs,bx,by+bh,bx+cs,by+bh],[bx+bw-cs,by+bh,bx+bw,by+bh,bx+bw,by+bh-cs]
+  ].forEach(([x1,y1,x2,y2,x3,y3])=>{
+    ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.lineTo(x3,y3);ctx.stroke();
+  });
+  ctx.shadowBlur=0;
+
+  // Label with EAR value
+  const tag=`${side} · ${open?'OPEN':'CLOSED'} · ${earVal.toFixed(3)}`;
+  const fs=Math.max(9,overlay.width*0.012);
+  ctx.font=`bold ${fs}px 'IBM Plex Mono',monospace`;
+  const tw=ctx.measureText(tag).width+10;
+  ctx.fillStyle=color; ctx.shadowColor=color; ctx.shadowBlur=8;
+  ctx.fillRect(bx,by-fs-8,tw,fs+8); ctx.shadowBlur=0;
+  ctx.fillStyle='#000'; ctx.fillText(tag,bx+5,by-2);
+
+  // Iris landmarks (refined)
+  if(lm.length>477&&primary){
+    const ipts=irisIdx.map(i=>lm[i]).filter(Boolean);
+    if(ipts.length>=4){
+      const cx=ipts.reduce((s,p)=>s+p.x,0)/ipts.length;
+      const cy=ipts.reduce((s,p)=>s+p.y,0)/ipts.length;
+      const r=Math.hypot(ipts[1].x-cx,ipts[1].y-cy);
+      // Outer iris circle
+      ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2);
+      ctx.strokeStyle=open?'rgba(0,255,157,0.7)':'rgba(255,45,85,0.7)';
+      ctx.lineWidth=2; ctx.shadowColor=color; ctx.shadowBlur=8;
+      ctx.stroke(); ctx.shadowBlur=0;
+      // Inner pupil dot
+      ctx.beginPath(); ctx.arc(cx,cy,r*0.35,0,Math.PI*2);
+      ctx.fillStyle=open?'rgba(0,255,157,0.4)':'rgba(255,45,85,0.4)';
+      ctx.fill();
+      // Center dot
+      ctx.beginPath(); ctx.arc(cx,cy,2,0,Math.PI*2);
+      ctx.fillStyle=color; ctx.fill();
+    }
+  }
+}
+
+function drawNoseBridge(lm,open){
+  // Draw subtle nose ridge line for depth effect
+  const nose=[168,6,197,195,5];
+  const color=open?'rgba(0,255,157,0.2)':'rgba(255,45,85,0.2)';
+  ctx.beginPath();
+  ctx.moveTo(lm[nose[0]].x,lm[nose[0]].y);
+  nose.forEach(i=>ctx.lineTo(lm[i].x,lm[i].y));
+  ctx.strokeStyle=color; ctx.lineWidth=1; ctx.stroke();
+}
+
+// ── Helpers ──
+function setEyeText(s){
+  const el=$('eyeText');
+  if(s==='open') el.innerHTML='<span style="color:var(--green)">👁 &nbsp;EYES OPEN &nbsp;·&nbsp; AWAKE ✅</span>';
+  else if(s==='closed') el.innerHTML='<span style="color:var(--red)">😴 &nbsp;EYES CLOSED &nbsp;·&nbsp; DROWSY ⚠️</span>';
+  else el.innerHTML='<span style="color:var(--muted)">👤 &nbsp;No face — please face the camera</span>';
+}
+
+function reset(){
+  closedStart=null; alerted=false;
+  $('barFill').style.width='0%';
+  $('barFill').style.background='var(--accent)';
+  $('barPct').textContent='0%  /  0.0s';
+  $('sClosed').textContent='0.0s';
+  $('statAlertCard').classList.remove('alert-stat');
+}
+
+function updateFps(){
+  fpsN++;
+  const now=performance.now();
+  if(now-fpsT>=1000){
+    $('hFps').textContent=fpsN+' fps'; $('sFps').textContent=fpsN;
+    fpsN=0; fpsT=now;
+  }
+}
+
+function addLog(d,durationMs){
+  const b=$('logBody');
+  if(b.querySelector('.log-empty')) b.innerHTML='';
+  const row=document.createElement('div'); row.className='log-row';
+  row.innerHTML=`
+    <span class="log-idx">#${alertCount}</span>
+    <span class="log-msg">Drowsiness detected</span>
+    <span class="log-dur">${(durationMs/1000).toFixed(1)}s closed</span>
+    <span class="log-ts">${d.toLocaleTimeString()}</span>`;
+  b.prepend(row);
+  $('logCount').textContent=alertCount+' event'+(alertCount!==1?'s':'');
+}
+
+function dismissAlert(){
+  $('alertBox').classList.remove('show');
+  stopAlarm(); stopVib(); reset();
+}
+</script>
+</body>
+</html>
